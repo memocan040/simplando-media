@@ -1,0 +1,34 @@
+# Löscht hochgeladene Simplando-Videos nach 3 Tagen (Buffer hat sie dann längst gesendet).
+name: cleanup-uploads
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  push:
+    branches: ["upload/**"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Alte Upload-Branches und Releases löschen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          KEEP_DAYS: "3"
+        run: |
+          cutoff=$(date -u -d "-${KEEP_DAYS} days" +%s)
+          gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name' | grep '^upload/' | while read -r b; do
+            d=$(gh api "repos/$REPO/commits/$b" --jq '.commit.committer.date')
+            if [ "$(date -u -d "$d" +%s)" -lt "$cutoff" ]; then
+              echo "lösche Branch $b ($d)"
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$b"
+            fi
+          done
+          gh release list -R "$REPO" --limit 500 --json tagName,createdAt --jq '.[] | "\(.tagName) \(.createdAt)"' | while read -r t d; do
+            if [ "$(date -u -d "$d" +%s)" -lt "$cutoff" ]; then
+              echo "lösche Release $t ($d)"
+              gh release delete "$t" -R "$REPO" --yes --cleanup-tag
+            fi
+          done
